@@ -1,0 +1,109 @@
+---
+title: "Analysis - CM Prolific"
+author: "Aaron"
+date: "October 03, 2019"
+output: rmarkdown::github_document
+---
+
+Analysis of data collected from Cleveland McGill replication experiment run on Prolific
+
+References:  
+ - https://github.com/mjskay/tidybayes  
+ - @codementum  
+
+## Grab the json file and convert into a list in R
+```{r}
+library("jsonlite")
+library(RCurl)
+
+tables <- read_json("https://clevelandmcgill-c116c.firebaseio.com/.json", simplifyVector = TRUE)
+# str(tables)
+```
+
+```{r}
+tables$Session
+```
+
+## Create the session tibble
+```{r}
+library(tidyverse)
+
+sessions <- tibble()
+for (session in tables$Session) {
+  new_row <- as_tibble(session)
+  sessions <- sessions %>% bind_rows(new_row)
+}
+sessions
+```
+
+## Create the trials tibble
+```{r}
+trials = tibble()
+for (img_name in tables$Trials) {
+  for (observation in img_name) {
+      new_row <- as_tibble(observation)
+      trials <- trials %>% bind_rows(new_row)
+    # trials <- rbind(trials_df, data.frame(observation))
+  }
+}
+trials
+```
+
+## Create `condition` column from `image_name`
+```{r}
+trials$condition <- NA
+for (i in seq_along(trials$image_name)) {
+  if (substr(trials$image_name[i], 3, 3) == 'B')
+    condition <- 'Bar'
+  else if (substr(trials$image_name[i], 3, 3) == 'P')
+    condition <- 'Pie'
+  else
+    condition <- '???'
+  
+  trials$condition[i] <- condition
+}
+
+trials
+```
+
+## Create column for absolute response error
+```{r}
+trials$abs_difference <- NA
+for (i in seq_along(trials$actual_answer)) {
+  trials$abs_difference[i] <- abs(strtoi(trials$actual_answer[i]) - strtoi(trials$expected_answer[i]))
+}
+
+trials
+```
+
+## TODO: Create `participant` column from `session_id` (session_id looks ugly in facet plot)
+```{r}
+unique(trials$session_id)
+```
+
+## Comparing Bar and Pie performance
+```{r}
+trials %>%
+  ggplot(aes(x = condition, y = abs_difference)) +
+  geom_point(alpha = 0.5) +
+  stat_summary(fun.data = "mean_cl_boot", colour = "red", size = 1.0, alpha=0.5) +
+  coord_flip()
+```
+
+## Comparing individual participant performance
+```{r}
+trials %>%
+  ggplot(aes(x = condition, y = abs_difference)) +
+  geom_point(alpha = 0.5) +
+  stat_summary(fun.data = "mean_cl_boot", colour = "red", size = 1.0, alpha=0.5) +
+  facet_wrap(~ session_id)
+
+ggsave('barvpie_byparticipant.pdf', units="in", width=5, height=8)
+```
+
+## TODO: t-tests to compare Bar and Pie performance
+
+```{r}
+
+```
+
