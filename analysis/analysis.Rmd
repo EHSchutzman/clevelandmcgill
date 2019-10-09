@@ -1,42 +1,47 @@
 ---
-title: "Analysis - CM Prolific"
-author: "Aaron"
+title: "Replicating Cleveland and McGill's study on Prolific - Data Analysis"
+author: "Team Prolific (Aaron, Ethan, Hung, Noëlle)"
 date: "October 03, 2019"
-output: rmarkdown::github_document
+output: pdf_document
 ---
 
-Analysis of data collected from Cleveland McGill replication experiment run on Prolific
+Analysis of data collected from Cleveland and McGill replication experiment run on Prolific
 
 References:  
  - https://github.com/mjskay/tidybayes  
  - @codementum  
 
-## Grab the json file and convert into a list in R
-```{r}
+## Libraries needed
+```{r echo = TRUE, message=FALSE}
 library("jsonlite")
 library(RCurl)
+library(plyr)
+library(tidyverse)
+```
 
+## Grab the JSON file from firebase and convert into a list in R
+```{r}
 tables <- read_json("https://clevelandmcgill-c116c.firebaseio.com/.json", simplifyVector = TRUE)
 # str(tables)
+# tables$Session
 ```
 
+## Create the `sessions` tibble
 ```{r}
-tables$Session
-```
-
-## Create the session tibble
-```{r}
-library(tidyverse)
-
 sessions <- tibble()
 for (session in tables$Session) {
   new_row <- as_tibble(session)
   sessions <- sessions %>% bind_rows(new_row)
 }
-sessions
+ 
+# Filter out empty response
+sessions <- sessions %>%
+  filter(age != "" & animal != "" & country != "" & prolific_id != "" & session_id != "")
+
+# sessions
 ```
 
-## Create the trials tibble
+## Create the `trials` tibble
 ```{r}
 trials = tibble()
 for (img_name in tables$Trials) {
@@ -46,10 +51,17 @@ for (img_name in tables$Trials) {
     # trials <- rbind(trials_df, data.frame(observation))
   }
 }
-trials
+
+# Filter out empty responses
+trials <- trials %>%
+  filter(actual_answer != "")
+
+# trials
 ```
 
-## Create `condition` column from `image_name`
+## Clean the data to make later function calls easier
+
+### Create `condition` column from `image_name` (to easily filter by condition)
 ```{r}
 trials$condition <- NA
 for (i in seq_along(trials$image_name)) {
@@ -62,48 +74,83 @@ for (i in seq_along(trials$image_name)) {
   
   trials$condition[i] <- condition
 }
-
-trials
 ```
 
-## Create column for absolute response error
+### Create column for the log_2 error rate (as described in the paper by Cleveland and McGill)
 ```{r}
-trials$abs_difference <- NA
-for (i in seq_along(trials$actual_answer)) {
-  trials$abs_difference[i] <- abs(strtoi(trials$actual_answer[i]) - strtoi(trials$expected_answer[i]))
-}
-
-trials
+trials$log2_error <- log(abs(strtoi(trials$actual_answer) - strtoi(trials$expected_answer)) + 0.125, base = 2)
 ```
 
-## TODO: Create `participant` column from `session_id` (session_id looks ugly in facet plot)
+### Create `participant` column from `session_id` (to make the facet plot tidier)
 ```{r}
-unique(trials$session_id)
+trials$participant <- factor(
+  trials$session_id, levels=unique(trials$session_id), labels = seq_along(unique(trials$session_id))
+)
+
+# trials
 ```
 
-## Comparing Bar and Pie performance
+# Comparing aggregate error rates for bar and pie charts
 ```{r}
 trials %>%
-  ggplot(aes(x = condition, y = abs_difference)) +
+  ggplot(aes(x = condition, y = log2_error)) +
   geom_point(alpha = 0.5) +
   stat_summary(fun.data = "mean_cl_boot", colour = "red", size = 1.0, alpha=0.5) +
-  coord_flip()
+  coord_flip() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  ggtitle("Aggregated error rates by chart type")
 ```
+As expected, error rates on pie charts are higher than the error rates on bar charts
 
-## Comparing individual participant performance
+# Comparing individual participant error rates by chart type
 ```{r}
 trials %>%
-  ggplot(aes(x = condition, y = abs_difference)) +
+  ggplot(aes(x = condition, y = log2_error)) +
   geom_point(alpha = 0.5) +
   stat_summary(fun.data = "mean_cl_boot", colour = "red", size = 1.0, alpha=0.5) +
-  facet_wrap(~ session_id)
+  facet_wrap(~ participant) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  ggtitle("Individual error rates by chart type")
+  # theme(panel.spacing = unit(2, "lines"))
 
 ggsave('barvpie_byparticipant.pdf', units="in", width=5, height=8)
 ```
+We still see the same trend of higher error rates on pie charts (with a couple of outliers)
 
-## TODO: t-tests to compare Bar and Pie performance
+# Statistical Analysis
 
+## Normality test of the bar and pie responses 
 ```{r}
+pie <- trials %>% 
+  filter(condition == "Pie")
+bar <- trials %>%
+  filter(condition == "Bar")
 
+shapiro.test(bar$log2_error)
+```
+```{r}
+shapiro.test(pie$log2_error)
 ```
 
+## Density plots - validating normality test
+
+Our normality test indicates that the error rates for the bar and pie charts are not normally distributed. We validate this by creating density plots by chart type, with the mean value of each group also indicated.
+```{r}
+mu <- ddply(trials, "condition", summarise, grp.mean=mean(log2_error))
+
+trials %>%
+  ggplot(aes(x=log2_error, color=condition)) +
+  geom_density() +
+  geom_vline(data=mu, aes(xintercept=grp.mean, color=condition),
+             linetype="dashed")
+```
+
+## Wilcoxon rank sum test
+Our test for normality came out negative therefore we perform the Wilcoxon rank sum test (Note that we might have had a normal distribution if we got rid of the outliers from participant 1)
+```{r}
+wilcox.test(pie$log2_error, bar$log2_error)
+```
+
+```{r}
+# t.test(pie$response, bar$response)
+```
